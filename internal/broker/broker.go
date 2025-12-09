@@ -1,8 +1,10 @@
 package broker
 
 import (
-	"bufio"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -25,28 +27,75 @@ func NewBroker() *Broker {
 	}
 }
 
-// HandleConnection manages the lifecycle and message parsing for one client connection.
+// SubPayload is the binary payload for the CMD_SUB command.
+type SubPayload struct {
+	Topic string
+}
+
+// AckPayload is the binary payload for the CMD_ACK command.
+type AckPayload struct {
+	MessageID string
+}
+
+// PubPayload is the binary payload for the CMD_PUB command.
+// (You can reuse your existing Message struct if you like,
+// or define a separate struct for cleaner command handling)
+type PubPayload struct {
+	Topic   string
+	Payload string // The message content
+}
+
+// In internal/broker/broker.go
 func (b *Broker) HandleConnection(conn net.Conn) {
 	defer conn.Close()
-	// Get a reader for efficient line-by-line reading
-	reader := bufio.NewReader(conn)
 
-	log.Printf("Client connected: %s", conn.RemoteAddr())
+	// Note: If you implement the PING/PONG Monitor, add it here:
+	// go b.MonitorConnection(conn, monitor)
 
-	// Loop to process incoming commands
 	for {
-		// ReadString blocks this goroutine until a newline is found or an error occurs
-		command, err := reader.ReadString('\n')
+		commandType, payload, err := readBinaryCommand(conn)
+
 		if err != nil {
-			// This handles disconnects (io.EOF) and read errors gracefully
-			log.Printf("Client disconnected or read error: %v", err)
+			// ... handle error and break ...
 			break
 		}
 
-		// Execute the command logic
-		response := b.ExecuteCommand(conn, command)
+		// Response variable must be initialized
+		var response string
 
-		// Write response back to the client
+		// CRITICAL: Switch on the command type
+		switch commandType {
+		case CMD_PUB:
+			var pubPayload PubPayload
+			if err := json.Unmarshal(payload, &pubPayload); err != nil {
+				response = fmt.Sprintf("ERR Decoding PUB payload: %v", err)
+			} else {
+				response = b.Publish(pubPayload.Topic, pubPayload.Payload)
+			}
+
+		case CMD_SUB:
+			var subPayload SubPayload
+			if err := json.Unmarshal(payload, &subPayload); err != nil {
+				response = fmt.Sprintf("ERR Decoding SUB payload: %v", err)
+			} else {
+				response = b.Subscribe(conn, subPayload.Topic)
+			}
+
+		case CMD_ACK:
+			var ackPayload AckPayload
+			if err := json.Unmarshal(payload, &ackPayload); err != nil {
+				response = fmt.Sprintf("ERR Decoding ACK payload: %v", err)
+			} else {
+				// NOTE: The ACK command needs to be updated to take the topic as well
+				// For simplicity, let's assume ACK takes only the ID and we search globally
+				response = b.Acknowledge(ackPayload.MessageID)
+			}
+
+		default:
+			response = fmt.Sprintf("ERR Unknown Command Type: %x", commandType)
+		}
+
+		// Write the text response back to the client
 		if _, err := conn.Write([]byte(response + "\n")); err != nil {
 			log.Printf("Error writing response: %v", err)
 			break
@@ -113,7 +162,7 @@ func (b *Broker) Publish(topic, message string) string {
 	select {
 	case q.msgChan <- msg:
 		// Message was successfully sent to the channel buffer
-		return "OK Published " + messageID
+		return "OK Published " + msg.ID
 	default:
 		// Backpressure in action: Channel buffer is full, reject the message
 		return "ERR Queue full, backpressure applied"
@@ -163,4 +212,30 @@ func (b *Broker) Acknowledge(messageID string) string {
 	}
 
 	return "ERR Message ID not found or already acknowledged."
+}
+
+// readBinaryCommand reads the full 5-byte header and the subsequent payload.
+func readBinaryCommand(conn net.Conn) (CommandType, []byte, error) {
+	// 1. Read the fixed-size header (5 bytes: 1 byte Command + 4 bytes Size)
+	headerBuf := make([]byte, MessageHeaderSize)
+
+	_, err := io.ReadFull(conn, headerBuf) // Use io.ReadFull for reliability
+	if err != nil {
+		return 0, nil, err
+	}
+
+	// 2. Decode the Command Type (first byte)
+	commandType := CommandType(headerBuf[0])
+
+	// 3. Decode the Payload Size (next 4 bytes)
+	payloadSize := binary.BigEndian.Uint32(headerBuf[1:MessageHeaderSize])
+
+	// 4. Read the payload of exactly that size
+	payloadBuf := make([]byte, payloadSize)
+	_, err = io.ReadFull(conn, payloadBuf)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return commandType, payloadBuf, nil // Return the type and the raw JSON payload
 }

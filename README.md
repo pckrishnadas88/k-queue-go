@@ -2,10 +2,25 @@
 
 KQueue-Go is an educational, low-latency message broker built entirely in Go. It is designed to master Go's concurrency model (Goroutines and Channels) and the fundamentals of distributed systems, providing a practical alternative to complex external brokers for internal microservices communication.
 
+### ⚠️ WARNING: Educational and Experimental Status
+
+**KQueue-Go is an educational project and is currently NOT suitable for production use.**
+
+This broker is a work-in-progress designed to explore and master high-performance Go concurrency, distributed systems fundamentals (Partitioning, Replication), and custom protocol design.
+
+  * **Known Limitations:** The current version lacks essential features required for durability and reliability, including:
+      * No Leader Election or Replication (Single Point of Failure).
+      * No Consumer Heartbeats or Message Redelivery on failure.
+      * No guaranteed strong consistency.
+  * **Use Case:** This repository is intended for learning, benchmarking, and demonstrating advanced Go systems engineering skills.
+
+-----
+
 ## 🌟 Key Features
 
-  * **Concurrency First:** Leverages **Goroutines** to handle every client connection (producer or consumer) and **Channels** to manage the message queue buffer, ensuring minimal overhead and high throughput.
-  * **Raw TCP Protocol:** Implements a custom, text-based TCP protocol (`PUB`, `SUB`) for low-latency communication, bypassing HTTP overhead.
+  * **Concurrency First:** Leverages **Goroutines** to handle every client connection and **Channels** to manage the message queue buffer, ensuring minimal overhead and high throughput.
+  * **Binary Protocol (Zero-Copy Ready):** Implements a **custom binary TCP protocol** using a fixed-size header for maximum performance, eliminating the overhead of text parsing and delimiters.
+  * **Reliability Contract:** Implements **ACK/Message ID tracking** to guarantee message delivery and prevent data loss from unacknowledged messages.
   * **Built-in Backpressure:** Uses buffered channels to automatically apply backpressure. If the message queue is full, the publisher is immediately rejected, preventing broker memory overload.
   * **Scalable Architecture:** Designed with clear separation of concerns, making it ready for integration into a multi-node cluster (see Roadmap).
 
@@ -16,7 +31,7 @@ KQueue-Go is an educational, low-latency message broker built entirely in Go. It
 ### Prerequisites
 
   * Go (1.20 or newer)
-  * A terminal for client testing (e.g., `nc` or `telnet`).
+  * The project's dedicated Go test client (`publisher_client.go`).
 
 ### 1\. Installation and Run
 
@@ -34,52 +49,29 @@ go install ./cmd/kqueue-server
 kqueue-server
 ```
 
-### 2\. Basic Usage (Terminal Test)
+### 2\. Usage (Binary Protocol Test)
 
-While the server is running, open two separate terminal windows.
+**NOTE:** Because KQueue-Go now uses a binary protocol, you **must use the dedicated Go client** for testing. `nc` and `telnet` are no longer compatible.
 
-**Terminal 1 (Consumer):**
-
-```bash
-nc localhost 6379
-SUB orders
-# Output: OK Subscribed to orders
-```
-
-**Terminal 2 (Producer):**
+Run the client from your project root to perform a full `SUB` -\> `PUB` test:
 
 ```bash
-nc localhost 6379
-PUB orders new order received at 12:00
-# Output: OK Published
+go run pkg/client/publisher_client.go
 ```
 
-The message will instantly appear in **Terminal 1** (`MSG orders new order received at 12:00`).
+**Expected Client Output:**
+
+```
+2025/... Client: Sending SUB command (34 bytes)...
+Broker Response: OK Subscribed to test_binary_topic
+
+2025/... Client: Sending PUB command (141 bytes) for topic 'test_binary_topic'...
+Broker Response: OK Published [UUID] 
+```
+
+*A successful test confirms that the binary header and the ACK/ID tracking are working.*
 
 -----
-
-Yes, you absolutely **should include a prominent warning** in your README stating that **KQueue-Go is not ready for production use**.
-
-This is crucial for two main reasons: **Honesty** (managing expectations) and **Professionalism** (protecting your reputation).
-
-Here is the recommended addition, along with an explanation of where to place it.
-
----
-
-
-### ⚠️ WARNING: Educational and Experimental Status
-
-**KQueue-Go is an educational project and is currently NOT suitable for production use.**
-
-This broker is a work-in-progress designed to explore and master high-performance Go concurrency, distributed systems fundamentals (Partitioning, Replication), and custom protocol design.
-
-* **Known Limitations:** The current version lacks essential features required for durability and reliability, including:
-    * No Leader Election or Replication (Single Point of Failure).
-    * No Consumer Heartbeats or Message Redelivery on failure.
-    * No guaranteed strong consistency.
-* **Use Case:** This repository is intended for learning, benchmarking, and demonstrating advanced Go systems engineering skills.
-
----
 
 ## 🗺️ Future Roadmap: Distributed Systems Mastery
 
@@ -92,7 +84,7 @@ This roadmap outlines the journey from a single-process broker to a production-r
 | **✅** | TCP & Protocol | Stabilize PUB, SUB, PING; clean parser; subscriber cleanup. |
 | **✅** | Core Queue | Topic channels, fanout, backpressure (via channel buffer size). |
 | **✅** | **ACK / Message IDs** | Assign unique IDs to messages, implement client ACK command, and remove messages after confirmation. |
-| **⬜** | **Zero-Copy Serialization** | Implement binary serialization (e.g., using Go's `encoding/binary`) to handle message payload as raw bytes, eliminating string conversion overhead. |
+| **✅** | **Zero-Copy Serialization** | Implemented binary serialization using a 5-byte fixed header to eliminate text parsing overhead. |
 | **⬜** | **Persistence V1 (WAL)** | Implement a basic **Write-Ahead Log (WAL)** using Go's `os` package to write committed messages to disk, allowing the broker to survive restarts. |
 | **⬜** | **Performance** | Establish baseline benchmarks (throughput, latency) using `go test -bench` and external tools. |
 

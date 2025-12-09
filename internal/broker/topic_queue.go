@@ -1,7 +1,8 @@
 package broker
 
 import (
-	"fmt"
+	"encoding/binary"
+	"encoding/json"
 	"log"
 	"net"
 	"sync"
@@ -23,6 +24,28 @@ type Message struct {
 	Payload string
 	// Status  string // Future: for tracking PENDING, ACKED, FAILED
 }
+
+// MessageHeader is the fixed-size structure sent before the payload.
+// Total size is 5 bytes.
+type MessageHeader struct {
+	Command     CommandType // 1 byte: What operation to perform
+	PayloadSize uint32      // 4 bytes: Length of the JSON payload that follows
+}
+
+// CommandType defines the type of operation requested by the client.
+type CommandType byte
+
+const (
+	// CMD_PUB is the command code for publishing a message.
+	CMD_PUB CommandType = 0x01
+	// CMD_SUB is the command code for subscribing to a topic.
+	CMD_SUB CommandType = 0x02
+	// CMD_ACK is the command code for acknowledging a message ID.
+	CMD_ACK CommandType = 0x03
+)
+
+// MessageHeaderSize will increase to 5 bytes: 4 bytes for size, 1 byte for command type.
+const MessageHeaderSize = 5
 
 // NewTopicQueue initializes the buffered channel.
 func NewTopicQueue() *TopicQueue {
@@ -47,38 +70,33 @@ func (q *TopicQueue) AddSubscriber(conn net.Conn, topic string) {
 	go q.listenAndDispatch(conn, topic)
 }
 
-// listenAndDispatch blocks on the message channel and sends messages to the client.
+// listenAndDispatch blocks on the message channel and sends messages to the client using the binary protocol.
 func (q *TopicQueue) listenAndDispatch(conn net.Conn, topic string) {
+	// The defer call ensures cleanup runs regardless of how the goroutine exits.
 	defer q.removeSubscriber(conn, topic)
 
 	// This goroutine waits for messages from the q.msgChan (the queue)
 	for msg := range q.msgChan {
 
-		// 1. Format output to include the unique ID
-		// Protocol: MSG <topic> <message_id> <payload>
-		output := fmt.Sprintf("MSG %s %s %s\n", topic, msg.ID, msg.Payload)
+		// 1. Get the final binary wire format.
+		// This includes the 4-byte header and the JSON-encoded payload.
+		wireData := msg.Bytes()
 
-		// 2. Mark as Unacknowledged (CRITICAL STEP)
-		// This is safe because only ONE dispatch goroutine is writing to the map
-		// on behalf of this one connection, but we still use the mutex
-		// because the 'ACK' command logic (ExecuteCommand) will access this map concurrently.
+		// 2. Mark as Unacknowledged (CRITICAL: Tracking the delivery contract)
+		// We lock because the ACK command in the broker handles this map concurrently.
 		q.mu.Lock()
 		q.unacked[msg.ID] = msg
 		q.mu.Unlock()
 
-		log.Printf("[DISPATCH] Sending ID:%s to %s", msg.ID, conn.RemoteAddr())
+		log.Printf("[DISPATCH] Sending binary ID:%s (%d bytes total) to %s", msg.ID, len(wireData), conn.RemoteAddr())
 
-		_, err := conn.Write([]byte(output))
+		// 3. Write the raw binary data to the connection.
+		_, err := conn.Write(wireData)
 		if err != nil {
-			// 3. Handle Write Failure (Connection Dead)
-			// If writing fails, the connection is considered dead. We break the loop
-			// and the 'defer' call to removeSubscriber cleans up.
+			// Handle Write Failure (Connection Dead)
 			log.Printf("Failed to dispatch to subscriber on %s: %v. Client closing.", topic, err)
-			// NOTE: In a real broker, we would need to check if the message was actually sent.
-			// If not, it needs to be immediately re-queued or moved to a failed list.
 			return
 		}
-		// NOTE: The message remains in the unacked map until the client sends the ACK command.
 	}
 }
 
@@ -92,4 +110,34 @@ func (q *TopicQueue) removeSubscriber(conn net.Conn, topic string) {
 	// For now, we only clean up the subscriber reference.
 	q.mu.Unlock()
 	log.Printf("Subscriber removed from topic: %s", topic)
+}
+
+// Bytes converts the Message struct into a binary []byte ready for the wire.
+func (m *Message) Bytes() []byte {
+	// We are simplifying: marshaling the entire struct (ID + Payload) into JSON/Gob first,
+	// then prepending the fixed-size header.
+	// NOTE: For true zero-copy, you'd use a more specialized library like Protobuf or Cap'n Proto.
+
+	// For this educational example, let's use JSON as the internal serialization format
+	// because binary libraries are complex. The key is separating header from payload.
+
+	// Step 1: Serialize the entire Message (ID + Payload)
+	payload, err := json.Marshal(m)
+	if err != nil {
+		log.Fatalf("JSON marshal error: %v", err) // Handle this better in production
+	}
+
+	payloadSize := uint32(len(payload))
+
+	// Step 2: Create the final buffer (Header + Payload)
+	buffer := make([]byte, MessageHeaderSize+payloadSize)
+
+	// Step 3: Write the fixed-size header (PayloadSize)
+	// We use BigEndian (network byte order) which is standard.
+	binary.BigEndian.PutUint32(buffer[:MessageHeaderSize], payloadSize)
+
+	// Step 4: Copy the JSON payload into the buffer
+	copy(buffer[MessageHeaderSize:], payload)
+
+	return buffer
 }
