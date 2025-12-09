@@ -56,7 +56,7 @@ kqueue-server
 Run the client from your project root to perform a full `SUB` -\> `PUB` test:
 
 ```bash
-go run pkg/client/publisher_client.go
+go run pkg/client/simple_client.go
 ```
 
 **Expected Client Output:**
@@ -67,6 +67,41 @@ Broker Response: OK Subscribed to test_binary_topic
 
 2025/... Client: Sending PUB command (141 bytes) for topic 'test_binary_topic'...
 Broker Response: OK Published [UUID] 
+```
+### Client SDK sample code
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/pckrishnadas88/k-queue-go/pkg/kqueueclient"
+)
+
+func main() {
+	client := kqueueclient.NewClient()
+	if err := client.Connect("localhost:6379"); err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+	log.Println("Client: Connected successfully.")
+
+	// 1. Subscribe (Simple Call)
+	subResponse, err := client.Subscribe("new_test_topic")
+	if err != nil {
+		log.Fatalf("Subscription failed: %v", err)
+	}
+	log.Printf("Broker: %s", subResponse)
+
+	// 2. Publish (Simple Call)
+	pubResponse, err := client.Publish("new_test_topic", "Hello from the clean SDK!")
+	if err != nil {
+		log.Fatalf("Publish failed: %v", err)
+	}
+	log.Printf("Broker: %s", pubResponse)
+}
+
 ```
 
 *A successful test confirms that the binary header and the ACK/ID tracking are working.*
