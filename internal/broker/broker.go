@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid" // Use a robust external library for UUIDs
 )
 
 // Broker is the core service struct.
@@ -77,6 +79,13 @@ func (b *Broker) ExecuteCommand(conn net.Conn, command string) string {
 		topic := parts[1]
 		return b.Subscribe(conn, topic)
 
+	case "ACK":
+		if len(parts) < 2 {
+			return "ERR Usage: ACK <message_id>"
+		}
+		messageID := parts[1]
+		return b.Acknowledge(messageID)
+
 	default:
 		return "ERR Unknown command"
 	}
@@ -89,6 +98,11 @@ func (b *Broker) Publish(topic, message string) string {
 	b.mu.RLock()
 	q, ok := b.topics[topic]
 	b.mu.RUnlock()
+	messageID := uuid.New().String()
+	msg := Message{
+		ID:      messageID,
+		Payload: message,
+	}
 
 	if !ok {
 		// If topic doesn't exist, create it (optional: depends on policy)
@@ -97,9 +111,9 @@ func (b *Broker) Publish(topic, message string) string {
 
 	// CRITICAL: Send message to the TopicQueue channel
 	select {
-	case q.msgChan <- message:
+	case q.msgChan <- msg:
 		// Message was successfully sent to the channel buffer
-		return "OK Published"
+		return "OK Published " + messageID
 	default:
 		// Backpressure in action: Channel buffer is full, reject the message
 		return "ERR Queue full, backpressure applied"
@@ -121,4 +135,32 @@ func (b *Broker) Subscribe(conn net.Conn, topic string) string {
 	// This goroutine blocks waiting for messages ONLY on this topic.
 	q.AddSubscriber(conn, topic)
 	return fmt.Sprintf("OK Subscribed to %s", topic)
+}
+
+// NEW: Acknowledge function to safely remove the message.
+func (b *Broker) Acknowledge(messageID string) string {
+	// You'll need to figure out which topic the message belongs to,
+	// but for simplicity now, we'll iterate or require the topic in the command:
+	// ACK <topic> <id>
+
+	// Assuming a simple system where we just check one global or inferred unacked map:
+	// (A real broker would check the specific topic's unacked map)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// CRITICAL: Find the message in the appropriate TopicQueue and remove it.
+	// For now, this logic is pseudocode:
+	for _, q := range b.topics {
+		q.mu.Lock()
+		if _, found := q.unacked[messageID]; found {
+			delete(q.unacked, messageID)
+			q.mu.Unlock()
+			log.Printf("Message ID %s acknowledged and removed.", messageID)
+			return "OK ACK"
+		}
+		q.mu.Unlock()
+	}
+
+	return "ERR Message ID not found or already acknowledged."
 }

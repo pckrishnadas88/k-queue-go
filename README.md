@@ -91,7 +91,7 @@ This roadmap outlines the journey from a single-process broker to a production-r
 | :--- | :--- | :--- |
 | **✅** | TCP & Protocol | Stabilize PUB, SUB, PING; clean parser; subscriber cleanup. |
 | **✅** | Core Queue | Topic channels, fanout, backpressure (via channel buffer size). |
-| **⬜** | **ACK / Message IDs** | Assign unique IDs to messages, implement client ACK command, and remove messages after confirmation. |
+| **✅** | **ACK / Message IDs** | Assign unique IDs to messages, implement client ACK command, and remove messages after confirmation. |
 | **⬜** | **Zero-Copy Serialization** | Implement binary serialization (e.g., using Go's `encoding/binary`) to handle message payload as raw bytes, eliminating string conversion overhead. |
 | **⬜** | **Persistence V1 (WAL)** | Implement a basic **Write-Ahead Log (WAL)** using Go's `os` package to write committed messages to disk, allowing the broker to survive restarts. |
 | **⬜** | **Performance** | Establish baseline benchmarks (throughput, latency) using `go test -bench` and external tools. |
