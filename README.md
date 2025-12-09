@@ -24,7 +24,7 @@ Clone the repository and run the main executable:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/kqueue-go.git
+git clone https://github.com/pckrishnadas88/k-queue-go
 cd kqueue-go
 
 # Compile and install the server executable
